@@ -31,20 +31,6 @@ class OpenAISettings(LLMSettings):
     api_key: str = Field(default_factory=lambda: os.getenv("OPENAI_API_KEY"))
     default_model: str = Field(default="gpt-4o")
     embedding_model: str = Field(default="text-embedding-3-small")
-    
-class OpenRouterSettings(LLMSettings):
-    api_key: str = Field(default_factory=lambda: os.getenv("OPENROUTER_API_KEY"))
-    base_url: str = "https://openrouter.ai/api/v1"
-    default_model: str = "gpt-4o-mini"
-    embedding_model: str = "text-embedding-3-small"
-    
-class GroqSettings(LLMSettings):
-    api_key: str = Field(default_factory=lambda: os.getenv("GROQ_API_KEY"))
-    base_url: str = "https://api.groq.com/openai/v1"
-
-    # models
-    default_model: str = "llama3-70b-8192"
-    embedding_model: str = "text-embedding-3-small"
 
 
 class DatabaseSettings(BaseModel):

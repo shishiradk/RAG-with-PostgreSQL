@@ -1,3 +1,4 @@
+# %%
 from datetime import datetime
 
 import pandas as pd
@@ -11,6 +12,7 @@ vec = VectorStore()
 df = pd.read_csv("../data/faq_dataset.csv", sep=";")
 
 
+# %%
 # Prepare data for insertion
 def prepare_record(row):
     """Prepare a record for insertion into the vector store.

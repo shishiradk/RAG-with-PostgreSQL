@@ -1,240 +1,81 @@
-from typing import Any, Dict, List, Type, Optional
-import time
-import random
-import logging
-
-import instructor
-from anthropic import Anthropic
-from openai import OpenAI
-from pydantic import BaseModel
-
-from config.settings import get_settings
+from typing import List
+import pandas as pd
+from pydantic import BaseModel, Field
+from services.llm_factory import LLMFactory
 
 
-class LLMFactory:
-    def __init__(self, provider: str):
-        self.provider = provider
-        self.settings = getattr(get_settings(), provider)
-        self.client = self._initialize_client()
-        # defaults for new features (can be overridden in settings)
-        self.max_retries = getattr(self.settings, "max_retries", 3)
-        self.backoff_base = getattr(self.settings, "backoff_base", 0.5)  # seconds
-        self.backoff_max = getattr(self.settings, "backoff_max", 8.0)    # seconds
-        # cost routing map: provider -> cost per 1k tokens (USD or arbitrary units)
-        self.cost_map = getattr(self.settings, "cost_per_1k_tokens", {
-            "openai": 0.03,
-            "openrouter": 0.02,
-            "groq": 0.015,
-            "llama": 0.0,
-            "anthropic": 0.05,
-        })
+class SynthesizedResponse(BaseModel):
+    thought_process: List[str] = Field(
+        description="List of thoughts that the AI assistant had while synthesizing the answer"
+    )
+    answer: str = Field(description="The synthesized answer to the user's question")
+    enough_context: bool = Field(
+        description="Whether the assistant has enough context to answer the question"
+    )
 
-    def _initialize_client(self) -> Any:
-        client_initializers = {
-            "openai": lambda s: instructor.from_openai(
-                OpenAI(api_key=s.api_key),
-                mode=instructor.Mode.JSON,
-            ),
-            "anthropic": lambda s: instructor.from_anthropic(
-                Anthropic(api_key=s.api_key)
-            ),
-            "llama": lambda s: instructor.from_openai(
-                OpenAI(base_url=s.base_url, api_key=s.api_key),
-                mode=instructor.Mode.JSON,
-            ),
-            "openrouter": lambda s: instructor.from_openai(
-                OpenAI(base_url=s.base_url, api_key=s.api_key),
-                mode=instructor.Mode.JSON,
-            ),
-            "groq": lambda s: instructor.from_openai(
-                OpenAI(base_url=s.base_url, api_key=s.api_key),
-                mode=instructor.Mode.JSON,
-            ),
-        }
 
-        initializer = client_initializers.get(self.provider)
-        if initializer:
-            logging.debug("Initializing client for provider: %s", self.provider)
-            return initializer(self.settings)
+class Synthesizer:
+    SYSTEM_PROMPT = """
+    # Role and Purpose
+    You are an AI assistant for an e-commerce FAQ system. Your task is to synthesize a coherent and helpful answer 
+    based on the given question and relevant context retrieved from a knowledge database.
 
-        raise ValueError(f"Unsupported provider: {self.provider}")
+    # Guidelines:
+    1. Provide a clear and concise answer to the question.
+    2. Use only the information from the relevant context to support your answer.
+    3. The context is retrieved based on cosine similarity, so some information might be missing or irrelevant.
+    4. Be transparent when there is insufficient information to fully answer the question.
+    5. Do not make up or infer information not present in the provided context.
+    6. If you cannot answer the question based on the given context, clearly state that.
+    7. Maintain a helpful and professional tone appropriate for customer service.
+    8. Adhere strictly to company guidelines and policies by using only the provided knowledge base.
+    
+    Review the question from the user:
+    """
 
-    # ---------- Utility: token estimation ----------
-    def _estimate_tokens(self, messages: List[Dict[str, str]]) -> int:
+    @staticmethod
+    def generate_response(question: str, context: pd.DataFrame) -> SynthesizedResponse:
+        """Generates a synthesized response based on the question and context.
+
+        Args:
+            question: The user's question.
+            context: The relevant context retrieved from the knowledge base.
+
+        Returns:
+            A SynthesizedResponse containing thought process and answer.
         """
-        Cheap heuristic to estimate tokens from messages.
-        Counts words and scales to approximate tokens.
-        """
-        total_words = 0
-        for m in messages:
-            total_words += len(m.get("content", "").split())
-        # heuristic: 1 token ≈ 0.75 words -> tokens = ceil(words / 0.75)
-        tokens = int((total_words * 4 + 2) // 3)  # integer math approx for ceil(words/0.75)
-        return max(tokens, 1)
-
-    # ---------- Utility: auto model selection ----------
-    def _select_model_by_tokens(self, tokens: int) -> str:
-        """
-        Select model based on estimated token count and settings.
-        Uses settings.model_priority (list of tuples) if present:
-            model_priority = [
-                {"max_tokens": 2048, "model": "gpt-4o"},
-                {"max_tokens": 8192, "model": "gpt-4o-mini"},
-                ...
-            ]
-        Falls back to settings.default_model or settings.model.
-        """
-        priority = getattr(self.settings, "model_priority", None)
-        if priority:
-            for entry in priority:
-                if tokens <= int(entry.get("max_tokens", 2**30)):
-                    return entry.get("model")
-        return getattr(self.settings, "default_model", getattr(self.settings, "model", None))
-
-    # ---------- Utility: provider selection by cost ----------
-    def _select_provider_by_cost(self, estimated_tokens: int, candidates: Optional[List[str]] = None) -> str:
-        """
-        Choose the cheapest provider per estimated cost for the job.
-        estimated_tokens is count of tokens. cost_map uses cost per 1k tokens.
-        """
-        if not candidates:
-            candidates = list(self.cost_map.keys())
-
-        best = None
-        best_cost = float("inf")
-        for p in candidates:
-            price_per_1k = float(self.cost_map.get(p, 0.0))
-            # cost = price_per_1k * (tokens / 1000)
-            cost = price_per_1k * (estimated_tokens / 1000.0)
-            if cost < best_cost:
-                best_cost = cost
-                best = p
-        return best or self.provider
-
-    # ---------- Utility: retry with exponential backoff ----------
-    def _call_with_retries(self, call_fn, *args, **kwargs):
-        attempts = 0
-        while True:
-            try:
-                attempts += 1
-                start = time.time()
-                result = call_fn(*args, **kwargs)
-                elapsed = time.time() - start
-                logging.info("Provider call succeeded on attempt %d in %.3fs", attempts, elapsed)
-                return result
-            except Exception as e:
-                logging.warning("Provider call failed on attempt %d: %s", attempts, str(e))
-                if attempts >= self.max_retries:
-                    logging.error("Max retries reached (%d). Raising.", self.max_retries)
-                    raise
-                # exponential backoff with jitter
-                backoff = min(self.backoff_max, self.backoff_base * (2 ** (attempts - 1)))
-                jitter = random.uniform(0, backoff * 0.2)
-                sleep_time = backoff + jitter
-                logging.info("Sleeping %.3fs before retry %d", sleep_time, attempts + 1)
-                time.sleep(sleep_time)
-
-    # ---------- Embedding API with retries and logging ----------
-    def create_embedding(self, text: str) -> List[float]:
-        embed_model = getattr(self.settings, "embedding_model", None)
-        if not embed_model:
-            raise ValueError(f"No embedding_model defined for provider {self.provider}")
-
-        # Use provider-specific base_url if available
-        embed_client = OpenAI(
-            api_key=self.settings.api_key,
-            base_url=getattr(self.settings, "base_url", None),
+        context_str = Synthesizer.dataframe_to_json(
+            context, columns_to_keep=["content", "category"]
         )
 
-        def _call(text_inner):
-            return embed_client.embeddings.create(
-                model=embed_model,
-                input=text_inner.replace("\n", " "),
-            )
+        messages = [
+            {"role": "system", "content": Synthesizer.SYSTEM_PROMPT},
+            {"role": "user", "content": f"# User question:\n{question}"},
+            {
+                "role": "assistant",
+                "content": f"# Retrieved information:\n{context_str}",
+            },
+        ]
 
-        logging.debug("Generating embedding using provider '%s' model '%s'.", self.provider, embed_model)
-        response = self._call_with_retries(_call, text)
-        embedding = response.data[0].embedding
-        logging.debug("Embedding length: %d", len(embedding))
-        return embedding
+        llm = LLMFactory("openai")
+        return llm.create_completion(
+            response_model=SynthesizedResponse,
+            messages=messages,
+        )
 
-    # ---------- Completion with auto-fallback, model selection, cost routing, retries ----------
-    def create_completion(
-        self,
-        response_model: Type[BaseModel],
-        messages: List[Dict[str, str]],
-        **kwargs,
-    ) -> Any:
-        # estimate tokens
-        estimated_tokens = self._estimate_tokens(messages)
-        logging.debug("Estimated tokens for request: %d", estimated_tokens)
+    @staticmethod
+    def dataframe_to_json(
+        context: pd.DataFrame,
+        columns_to_keep: List[str],
+    ) -> str:
+        """
+        Convert the context DataFrame to a JSON string.
 
-        # auto model selection
-        selected_model = kwargs.get("model") or self._select_model_by_tokens(estimated_tokens)
-        logging.debug("Selected model: %s", selected_model)
+        Args:
+            context (pd.DataFrame): The context DataFrame.
+            columns_to_keep (List[str]): The columns to include in the output.
 
-        # cost-based routing (if caller allows alternative providers)
-        allow_fallback_routing = kwargs.get("enable_cost_routing", True)
-        provider_to_use = self.provider
-        if allow_fallback_routing:
-            provider_to_use = self._select_provider_by_cost(estimated_tokens)
-            if provider_to_use != self.provider:
-                logging.info("Cost routing selected provider '%s' over '%s'", provider_to_use, self.provider)
-
-        # build completion parameters
-        completion_params = {
-            "model": selected_model,
-            "temperature": kwargs.get("temperature", getattr(self.settings, "temperature", 0.0)),
-            "max_tokens": kwargs.get("max_tokens", getattr(self.settings, "max_tokens", None)),
-            "max_retries": kwargs.get("max_retries", getattr(self.settings, "max_retries", self.max_retries)),
-            "response_model": response_model,
-            "messages": messages,
-        }
-
-        # if provider_to_use differs, construct a temporary client
-        if provider_to_use != self.provider:
-            temp_settings = getattr(get_settings(), provider_to_use)
-            temp_client = instructor.from_openai(
-                OpenAI(base_url=getattr(temp_settings, "base_url", None), api_key=temp_settings.api_key),
-                mode=instructor.Mode.JSON,
-            )
-            call_target = temp_client.completions.create
-            log_provider = provider_to_use
-        else:
-            call_target = self.client.completions.create
-            log_provider = self.provider
-
-        logging.info("Calling provider '%s' model '%s' with estimated %d tokens", log_provider, selected_model, estimated_tokens)
-        try:
-            return self._call_with_retries(call_target, **completion_params)
-        except Exception:
-            logging.warning("Primary provider failed; attempting fallback chain.")
-            return self._fallback(response_model, messages, **kwargs)
-
-    # ---------- Fallback chain ----------
-    def _fallback(
-        self,
-        response_model: Type[BaseModel],
-        messages: List[Dict[str, str]],
-        **kwargs,
-    ):
-        fallback_order = ["groq", "openrouter", "openai", "llama", "anthropic"]
-        # remove original provider if in list
-        if self.provider in fallback_order:
-            fallback_order.remove(self.provider)
-
-        for p in fallback_order:
-            try:
-                logging.info("Trying fallback provider: %s", p)
-                fallback_llm = LLMFactory(p)
-                return fallback_llm.create_completion(
-                    response_model=response_model,
-                    messages=messages,
-                    **kwargs,
-                )
-            except Exception as e:
-                logging.warning("Fallback provider %s failed: %s", p, str(e))
-                continue
-
-        logging.error("All providers in fallback chain failed.")
-        raise RuntimeError("All providers failed.")
+        Returns:
+            str: A JSON string representation of the selected columns.
+        """
+        return context[columns_to_keep].to_json(orient="records", indent=2)
