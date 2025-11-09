@@ -7,7 +7,7 @@ from typing import Optional
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
-load_dotenv(dotenv_path="./.env")
+load_dotenv(dotenv_path="../.env")
 
 
 def setup_logging():
