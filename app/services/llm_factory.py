@@ -1,3 +1,5 @@
+import sys
+import os
 from typing import Any, Dict, List, Type
 
 import instructor
@@ -5,7 +7,10 @@ from anthropic import Anthropic
 from openai import OpenAI
 from pydantic import BaseModel
 
-from config.settings import get_settings
+# Add the parent directory to Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+from app.config.settings import get_settings
 
 
 class LLMFactory:

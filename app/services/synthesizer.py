@@ -1,7 +1,13 @@
+import sys
+import os
 from typing import List
 import pandas as pd
 from pydantic import BaseModel, Field
-from services.llm_factory import LLMFactory
+
+# Add the parent directory to Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+from app.services.llm_factory import LLMFactory
 
 
 class SynthesizedResponse(BaseModel):
