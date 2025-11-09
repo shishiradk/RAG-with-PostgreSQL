@@ -1,26 +1,15 @@
-# Core dependencies
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-pydantic==2.5.0
-python-dotenv==1.0.0
-
-# Database - use binary packages only
-psycopg2-binary==2.9.9
-pgvector==0.4.1
-
-# AI/ML
-openai==1.2.0
-anthropic==0.7.4
-instructor==0.4.5
-
-# Data processing
-pandas==2.1.4
-numpy==1.24.3
-
-# Web
-streamlit==1.28.0
-requests==2.31.0
-
-# Remove problematic packages
-# timescale-vector==0.0.7  # REMOVE THIS LINE
-# ipykernel==7.1.0         # REMOVE THIS LINE (not needed for production)
+pandas
+openai
+psycopg2-binary
+python-dotenv
+timescale-vector
+instructor
+anthropic
+fastapi
+uvicorn[standard]
+ipykernel
+pydantic
+streamlit
+pgvector
+numpy
+requests
