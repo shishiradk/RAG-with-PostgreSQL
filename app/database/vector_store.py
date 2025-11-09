@@ -1,7 +1,6 @@
 import logging
 import time
 import json
-import sys
 import os
 from typing import Any, List, Optional, Tuple, Union
 from datetime import datetime
@@ -12,11 +11,8 @@ from pgvector.psycopg2 import register_vector
 import numpy as np
 from openai import OpenAI
 
-# Add the parent directory to Python path to import config
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
-# Use relative import since we're in the app package
-from config.settings import get_settings
+# Use relative import - remove the sys.path manipulation
+from ..config.settings import get_settings
 
 
 class VectorStore:
@@ -144,7 +140,7 @@ class VectorStore:
         query_text: str,
         limit: int = 5,
         metadata_filter: dict = None,
-        predicates: Optional[Any] = None,  # Keeping for compatibility, but not used in pgvector
+        predicates: Optional[Any] = None,
         time_range: Optional[Tuple[datetime, datetime]] = None,
         return_dataframe: bool = True,
     ) -> Union[List[Tuple[Any, ...]], pd.DataFrame]:
@@ -173,7 +169,7 @@ class VectorStore:
         """
         
         where_conditions = []
-        params = [query_embedding]  # This will be cast to vector type
+        params = [query_embedding]
         
         # Add metadata filter
         if metadata_filter:
@@ -203,7 +199,6 @@ class VectorStore:
             logging.info(f"Vector search completed in {elapsed_time:.3f} seconds, found {len(results)} results")
         except Exception as e:
             logging.error(f"Error executing search query: {e}")
-            # Fallback: try without explicit vector casting
             try:
                 base_query_fallback = f"""
                     SELECT id, metadata, content, embedding, 

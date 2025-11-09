@@ -7,7 +7,17 @@ from typing import Optional
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
-load_dotenv(dotenv_path="../.env")
+# Load from root directory - use absolute path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+root_dir = os.path.dirname(os.path.dirname(current_dir))
+env_path = os.path.join(root_dir, '.env')
+
+print(f"Looking for .env at: {env_path}")  # Debug
+load_dotenv(dotenv_path=env_path)
+
+# Debug: Check if environment variables are loaded
+print(f"TIMESCALE_SERVICE_URL: {os.getenv('TIMESCALE_SERVICE_URL', 'NOT_FOUND')}")
+print(f"OPENAI_API_KEY: {'SET' if os.getenv('OPENAI_API_KEY') else 'NOT_FOUND'}")
 
 
 def setup_logging():
@@ -28,7 +38,7 @@ class LLMSettings(BaseModel):
 class OpenAISettings(LLMSettings):
     """OpenAI-specific settings extending LLMSettings."""
 
-    api_key: str = Field(default_factory=lambda: os.getenv("OPENAI_API_KEY"))
+    api_key: str = Field(default_factory=lambda: os.getenv("OPENAI_API_KEY", "MISSING_OPENAI_KEY"))
     default_model: str = Field(default="gpt-4o")
     embedding_model: str = Field(default="text-embedding-3-small")
 
@@ -36,7 +46,7 @@ class OpenAISettings(LLMSettings):
 class DatabaseSettings(BaseModel):
     """Database connection settings."""
 
-    service_url: str = Field(default_factory=lambda: os.getenv("TIMESCALE_SERVICE_URL"))
+    service_url: str = Field(default_factory=lambda: os.getenv("TIMESCALE_SERVICE_URL", "MISSING_DB_URL"))
 
 
 class VectorStoreSettings(BaseModel):
@@ -59,5 +69,11 @@ class Settings(BaseModel):
 def get_settings() -> Settings:
     """Create and return a cached instance of the Settings."""
     settings = Settings()
+    
+    # Debug settings
+    print(f"Final Settings:")
+    print(f"   Database URL: {settings.database.service_url}")
+    print(f"   OpenAI Key: {'SET' if settings.openai.api_key != 'MISSING_OPENAI_KEY' else 'MISSING'}")
+    
     setup_logging()
     return settings

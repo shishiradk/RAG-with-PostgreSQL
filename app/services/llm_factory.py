@@ -10,6 +10,7 @@ from pydantic import BaseModel
 # Add the parent directory to Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+# Use full import path
 from app.config.settings import get_settings
 
 

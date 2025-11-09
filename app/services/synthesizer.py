@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 # Add the parent directory to Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+# Use full import path
 from app.services.llm_factory import LLMFactory
 
 

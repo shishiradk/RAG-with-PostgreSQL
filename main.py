@@ -1,5 +1,5 @@
 """
-FastAPI routes for the RAG application.
+FastAPI main application for RAG with PostgreSQL
 """
 import sys
 import os
@@ -9,8 +9,12 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
-# Add the parent directory to Python path to import app modules
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add current directory to Python path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+# Load environment variables FIRST
+from dotenv import load_dotenv
+load_dotenv()  # This loads from .env in the same directory as main.py
 
 from app.database.vector_store import VectorStore
 from app.services.synthesizer import Synthesizer
@@ -24,7 +28,7 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify actual origins
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -62,6 +66,147 @@ class HealthResponse(BaseModel):
 async def root():
     """Root endpoint."""
     return {"message": "RAG with PostgreSQL API", "status": "running"}
+
+@app.get("/debug-env")
+async def debug_env():
+    """Check environment variables"""
+    return {
+        "DATABASE_URL_set": bool(os.getenv("DATABASE_URL")),
+        "TIMESCALE_SERVICE_URL_set": bool(os.getenv("TIMESCALE_SERVICE_URL")),
+        "OPENAI_API_KEY_set": bool(os.getenv("OPENAI_API_KEY")),
+    }
+
+@app.get("/debug-db")
+async def debug_database():
+    """Debug database connection issues"""
+    try:
+        from app.config.settings import get_settings
+        
+        settings = get_settings()
+        db_url = settings.database.service_url
+        
+        # Show what URL we're trying to use
+        return {
+            "database_url_used": db_url,
+            "settings_loaded": True,
+            "connection_attempt": "will try with this URL"
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error_in_settings",
+            "error": str(e),
+            "error_type": type(e).__name__
+        }
+
+@app.get("/debug-settings")
+async def debug_settings():
+    """Check what settings are actually being used"""
+    from app.config.settings import get_settings
+    
+    settings = get_settings()
+    return {
+        "database_url": settings.database.service_url,
+        "openai_key_set": settings.openai.api_key != "MISSING_OPENAI_KEY",
+        "env_timescale_url": os.getenv("TIMESCALE_SERVICE_URL", "NOT_FOUND_IN_OS"),
+        "env_database_url": os.getenv("DATABASE_URL", "NOT_FOUND_IN_OS")
+    }
+
+@app.get("/debug-db-connection")
+async def debug_db_connection():
+    """Test database connection directly with psycopg2"""
+    try:
+        import psycopg2
+        from app.config.settings import get_settings
+        
+        settings = get_settings()
+        db_url = settings.database.service_url
+        
+        # Try to connect directly
+        conn = psycopg2.connect(db_url)
+        cur = conn.cursor()
+        
+        # Test basic query
+        cur.execute("SELECT 1 as test")
+        result = cur.fetchone()
+        
+        # Test embeddings table
+        cur.execute("SELECT COUNT(*) FROM embeddings")
+        count = cur.fetchone()[0]
+        
+        cur.close()
+        conn.close()
+        
+        return {
+            "status": "success",
+            "connection": "working",
+            "test_query": result[0],
+            "embeddings_count": count,
+            "database_url_preview": db_url[:30] + "..."  # Hide full URL
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "database_url_attempted": settings.database.service_url[:30] + "..."
+        }
+
+@app.get("/debug-vectorstore")
+async def debug_vectorstore():
+    """Test VectorStore initialization and basic operations"""
+    try:
+        from app.database.vector_store import VectorStore
+        
+        # Test VectorStore initialization
+        vec = VectorStore()
+        
+        # Test a simple query through VectorStore
+        vec.cur.execute("SELECT COUNT(*) FROM embeddings")
+        count = vec.cur.fetchone()[0]
+        
+        vec.close()
+        
+        return {
+            "status": "success",
+            "vectorstore_initialized": True,
+            "embeddings_count": count,
+            "message": "VectorStore is working correctly"
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "vectorstore_initialized": False,
+            "error": str(e),
+            "error_type": type(e).__name__
+        }
+
+@app.get("/test-db-connection")
+async def test_db_connection():
+    """Test database connection from FastAPI"""
+    try:
+        vec = VectorStore()
+        
+        # Test a simple query
+        vec.cur.execute("SELECT COUNT(*) as count FROM embeddings")
+        count = vec.cur.fetchone()[0]
+        
+        vec.close()
+        
+        return {
+            "status": "success",
+            "database": "connected",
+            "embeddings_count": count,
+            "message": f"Database is connected with {count} embeddings"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "database": "disconnected", 
+            "error": str(e)
+        }
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
@@ -194,3 +339,6 @@ async def get_stats():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get stats: {str(e)}")
 
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8001, reload=True)

@@ -1,0 +1,16 @@
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "./start.sh"
+
+[[services]]
+name = "rag-system"
+
+[[services.ports]]
+port = 8001
+protocol = "http"
+
+[[services.ports]]
+port = 8501  
+protocol = "http"
